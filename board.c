@@ -1,3 +1,10 @@
+/*
+g++ src/board.c -Iinclude -Ilibs/rpi-rgb-led-matrix/include \
+    -Llibs/rpi-rgb-led-matrix/lib -lrgbmatrix -lpthread -lrt -o board_standalone
+sudo ./board_standalone
+*/
+
+
 #include "../libs/rpi-rgb-led-matrix/include/led-matrix-c.h"
 #include "../include/board.h"
 #include <stdio.h>
@@ -134,7 +141,7 @@ void local_led_test(void) {
     sigaction(SIGTERM, &sa, NULL);
 
     // user input
-    char input_board[8][9];
+    char input_board[8][8];
     printf("------ Local LED Test ------\n");
     printf("<8 lines>: initial board state (each line has 8 characters: R, B, ., or #).\n");
     for (int i = 0; i < 8; ++i) {
@@ -160,3 +167,16 @@ void local_led_test(void) {
     sigaction(SIGTERM, NULL, NULL);
     printf("Local test Terminated.\n");
 }
+
+#ifdef BOARD_STANDALONE
+int main(int argc, char **argv) {
+    if (init_led_matrix(&argc, &argv) != 0) {
+        fprintf(stderr, "LED matrix init failed. Exiting.\n");
+        return 1;
+    }
+
+    local_led_test();
+    close_led_matrix();
+    return 0;
+}
+#endif
