@@ -188,3 +188,13 @@ int main(int argc, char **argv) {
     return EXIT_SUCCESS;
 }
 #endif  // BOARD_STANDALONE
+
+
+/*
+gcc -std=c11 -O2 \
+    -Iinclude -Ilibs/rpi-rgb-led-matrix/include \
+    board.c \
+    -Llibs/rpi-rgb-led-matrix/lib -lrgbmatrix -lpthread -lrt \
+    -DBOARD_STANDALONE \
+    -o board_standalone
+*/
