@@ -21,22 +21,6 @@
 
 static char board_arr[BOARD_SIZE][BOARD_SIZE];
 
-/* 기존 count_flips 함수 그대로 유지 */
-int count_flips(char board[BOARD_SIZE][BOARD_SIZE],
-                int r, int c, char player_color) {
-    int flip_count = 0;
-    char opponent = (player_color == 'R') ? 'B' : 'R';
-    for (int d = 0; d < 8; ++d) {
-        int nr = r + directions[d][0];
-        int nc = c + directions[d][1];
-        if (nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE) {
-            if (board[nr][nc] == opponent) {
-                flip_count++;
-            }
-        }
-    }
-    return flip_count;
-}
 
 /* =================================================================
  *                  시간 제한용 유틸리티
