@@ -1,6 +1,30 @@
 // board.c
 // g++ -DBOARD_STANDALONE board.c -Iinclude -Ilibs/rpi-rgb-led-matrix/include -Llibs/rpi-rgb-led-matrix/lib -lrgbmatrix -lpthread -lrt -o board_standalone
+/*
+kwon@raspberrypi:~/real_real/System-Programming-OctaFlip/hw3_202311160 $ g++ -DBOARD_STANDALONE src/board.c -Iinclude -Ilibs/rpi-rgb-led-matrix/include -Llibs/rpi-rgb-led-matrix/lib -lrgbmatrix -lpthread -lrt -o board_standalone
+kwon@raspberrypi:~/real_real/System-Programming-OctaFlip/hw3_202311160 $ ./board_standalone 
+Enter 8 lines for board state (each line: 8 chars R, B, ., or #):
+RRRRRRRR
+BBBBBBBB
+........
+RRRRRRRR
+RRRRRRRR
+RRRRRRRR
+RRRRRRRR
+........
+Suggestion: to slightly improve display update, add
+	isolcpus=3
+at the end of /boot/cmdline.txt and reboot (see README.md)
+FYI: not running as root which means we can't properly control timing unless this is a real-time kernel. Expect color degradation. Consider running as root with sudo.
+Can't set realtime thread priority=99: Operation not permitted.
+	You are probably not running as root ?
+	This will seriously mess with color stability and flicker
+	of the matrix. Please run as `root` (e.g. by invoking this
+	program with `sudo`), or setting the capability on this
+	binary by calling
+	sudo setcap 'cap_sys_nice=eip' /home/kwon/real_real/System-Programming-OctaFlip/hw3_202311160/board_standalone
 
+    */
 #include "../libs/rpi-rgb-led-matrix/include/led-matrix-c.h"
 #include "../include/board.h"
 #include <stdio.h>
