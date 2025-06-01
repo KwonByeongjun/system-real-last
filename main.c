@@ -5,7 +5,6 @@
 #include "client.h"
 #include "board.h"
 
-// 필요에 따라 port/ip/username 파싱은 기존 방식에 맞게 조정!
 
 void print_usage(const char *prog) {
     printf("Usage:\n");
@@ -20,8 +19,8 @@ int main(int argc, char *argv[]) {
     }
 
     if (strcmp(argv[1], "server") == 0) {
-        // ---- SERVER 모드 ----
-        int port = 8080;  // 기본값, 실제로는 인자 파싱 필요
+        // ---- SERVER  ----
+        int port = 8080;  // 기본값
 	    char port_str[16];
         for (int i = 2; i < argc; ++i) {
             if (strcmp(argv[i], "-p") == 0 && i + 1 < argc)
@@ -40,7 +39,7 @@ int main(int argc, char *argv[]) {
         return ret;
 
     } else if (strcmp(argv[1], "client") == 0) {
-        // ---- CLIENT 모드 ----
+        // ---- CLIENT  ----
         char *ip = NULL;
         int port = 8080;
 	    char port_str[16];
