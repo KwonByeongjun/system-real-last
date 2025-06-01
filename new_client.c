@@ -532,3 +532,4 @@ int client_run(const char *ip, const char *port, const char *username) {
     close(sockfd);
     return EXIT_SUCCESS;
 }
+
