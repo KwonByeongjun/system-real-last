@@ -1,30 +1,10 @@
-// board.c
-// g++ -DBOARD_STANDALONE board.c -Iinclude -Ilibs/rpi-rgb-led-matrix/include -Llibs/rpi-rgb-led-matrix/lib -lrgbmatrix -lpthread -lrt -o board_standalone
 /*
-kwon@raspberrypi:~/real_real/System-Programming-OctaFlip/hw3_202311160 $ g++ -DBOARD_STANDALONE src/board.c -Iinclude -Ilibs/rpi-rgb-led-matrix/include -Llibs/rpi-rgb-led-matrix/lib -lrgbmatrix -lpthread -lrt -o board_standalone
-kwon@raspberrypi:~/real_real/System-Programming-OctaFlip/hw3_202311160 $ ./board_standalone 
-Enter 8 lines for board state (each line: 8 chars R, B, ., or #):
-RRRRRRRR
-BBBBBBBB
-........
-RRRRRRRR
-RRRRRRRR
-RRRRRRRR
-RRRRRRRR
-........
-Suggestion: to slightly improve display update, add
-	isolcpus=3
-at the end of /boot/cmdline.txt and reboot (see README.md)
-FYI: not running as root which means we can't properly control timing unless this is a real-time kernel. Expect color degradation. Consider running as root with sudo.
-Can't set realtime thread priority=99: Operation not permitted.
-	You are probably not running as root ?
-	This will seriously mess with color stability and flicker
-	of the matrix. Please run as `root` (e.g. by invoking this
-	program with `sudo`), or setting the capability on this
-	binary by calling
-	sudo setcap 'cap_sys_nice=eip' /home/kwon/real_real/System-Programming-OctaFlip/hw3_202311160/board_standalone
+g++ src/board.c -Iinclude -Ilibs/rpi-rgb-led-matrix/include \
+    -Llibs/rpi-rgb-led-matrix/lib -lrgbmatrix -lpthread -lrt -o board_standalone
+sudo ./board_standalone
+*/
 
-    */
+
 #include "../libs/rpi-rgb-led-matrix/include/led-matrix-c.h"
 #include "../include/board.h"
 #include <stdio.h>
@@ -67,13 +47,15 @@ static void draw_grid_lines(struct LedCanvas *canvas) {
 }
 
 static void draw_piece_circle(struct LedCanvas *canvas, int row, int col, char piece) {
-    int origin_x = col * 8 + 1;
+
+    int origin_x = col * 8 + 1; // 예: col=0 → x=1, col=1 → x=9 ...
     int origin_y = row * 8 + 1;
 
     const int radius = 2;
     const int center_x = origin_x + 2;
     const int center_y = origin_y + 2;
 
+    // (R,G,B)
     uint8_t color[3] = {0, 0, 0};
     if (piece == 'R') {
         color[0] = 255; // red
@@ -99,6 +81,7 @@ static void draw_piece_circle(struct LedCanvas *canvas, int row, int col, char p
 int init_led_matrix(int *argc, char ***argv) {
     struct RGBLedMatrixOptions opts;
     memset(&opts, 0, sizeof(opts));
+    // 64×64
     opts.rows = 64;
     opts.cols = 64;
     opts.hardware_mapping = "adafruit-hat";
@@ -149,7 +132,7 @@ void local_led_test(void) {
         return;
     }
 
-    // SIGINT/SIGTERM -> Ctrl+C to terminate
+    // SIGINT/SIGTERM -> Ctrl+C로 종료 가능
     struct sigaction sa;
     sa.sa_handler = handle_sig;
     sigemptyset(&sa.sa_mask);
@@ -157,56 +140,41 @@ void local_led_test(void) {
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
-    // read user input
+    // user input
     char input_board[8][9];
     printf("------ Local LED Test ------\n");
     printf("<8 lines>: initial board state (each line has 8 characters: R, B, ., or #).\n");
     for (int i = 0; i < 8; ++i) {
         printf("Line %d > ", i + 1);
         if (scanf("%8s", input_board[i]) != 1) {
-            fprintf(stderr, "[Error] Failed to read board input\n");
+            fprintf(stderr, "[Error] 보드 입력 실패\n");
             return;
         }
         int ch;
         while ((ch = getchar()) != '\n' && ch != EOF);
     }
-    printf("Press Ctrl+C to terminate.\n");
+    printf("Press Ctrl+C to Terminate.\n");
 
+    // interrupt flag 올 때까지 반복
     interrupted_flag = 0;
     while (!interrupted_flag) {
         update_led_matrix((const char (*)[8])input_board);
-        usleep(100000); // 0.1s delay
+        // 0.1s delay
+        usleep(100000);
     }
-
-    // reset signal handlers
+    // reset signal
     sigaction(SIGINT, NULL, NULL);
     sigaction(SIGTERM, NULL, NULL);
-    printf("Local test terminated.\n");
+    printf("Local test Terminated.\n");
 }
 
-#ifdef BOARD_STANDALONE
 int main(int argc, char **argv) {
-    char input_board[8][9];
-    printf("Enter 8 lines for board state (each line: 8 chars R, B, ., or #):\n");
-    for (int i = 0; i < 8; ++i) {
-        if (scanf("%8s", input_board[i]) != 1) {
-            fprintf(stderr, "Error: failed to read board input\n");
-            return 1;
-        }
+    if (init_led_matrix(&argc, &argv) != 0) {
+        fprintf(stderr, "LED matrix init failed. Exiting.\n");
+        return 1;
     }
 
-    // Try to initialize LED matrix
-    if (init_led_matrix(&argc, &argv) == 0) {
-        // 성공적으로 초기화되었으면, LED에 한 번 출력 후 종료
-        update_led_matrix((const char (*)[8])input_board);
-        sleep(2); // 2초간 표시
-        close_led_matrix();
-    } else {
-        // LED 초기화에 실패하면, 입력받은 보드를 stdout에 그대로 출력
-        for (int i = 0; i < 8; ++i) {
-            printf("%s\n", input_board[i]);
-        }
-    }
+    local_led_test();
+    close_led_matrix();
     return 0;
 }
-#endif
