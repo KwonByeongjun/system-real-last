@@ -101,7 +101,7 @@ static int accept_and_register(int listen_fd) {
             continue;
         }
 
-        /* 이미 최대치 도달했으면 곧장 NACK */
+
         if (registered >= MAX_CLIENTS) {
             cJSON *nack = cJSON_CreateObject();
             cJSON_AddStringToObject(nack, "type", "register_nack");
@@ -112,14 +112,14 @@ static int accept_and_register(int listen_fd) {
             continue;
         }
 
-        /* 클라이언트로부터 JSON 한 줄을 읽는다 */
+        /* 클라이언트로부터 JSON 한 줄을 읽기 */
         cJSON *req = recv_json(client_fd);
         if (!req) {
             close(client_fd);
             continue;
         }
 
-        /* “type” 과 “username” 필드 검사 */
+        /* type 과 username 필드 검사 */
         cJSON *jtype = cJSON_GetObjectItem(req, "type");
         cJSON *juser = cJSON_GetObjectItem(req, "username");
         cJSON *resp = NULL;
@@ -191,7 +191,7 @@ static void game_loop(void) {
  
     int countPass = 0;
 
-    // --- game_start 메시지 보내는 부분은 이전과 동일 ---
+    // --- game_start 메시지  ---
     cJSON *game_start = cJSON_CreateObject();
     cJSON_AddStringToObject(game_start, "type", "game_start");
     cJSON *players = cJSON_AddArrayToObject(game_start, "players");
@@ -204,7 +204,7 @@ static void game_loop(void) {
     int turn = 0; // 0: Red, 1: Black
 
     while (!isGameOver(game.board)) {
-        // 1) your_turn 메시지 전송 (기존과 동일)
+        // 1) your_turn 메시지 전송 
         cJSON *your_turn = cJSON_CreateObject();
         cJSON_AddStringToObject(your_turn, "type", "your_turn");
         cJSON_AddItemToObject(your_turn, "board", board_to_json(&game));
@@ -219,24 +219,22 @@ static void game_loop(void) {
         FD_SET(client_fd, &readfds);
 
         struct timeval tv;
-        tv.tv_sec = TIMEOUT;     // TIMEOUT 초 동안 대기
+        tv.tv_sec = TIMEOUT;     
         tv.tv_usec = 0;
 
         int sel = select(client_fd + 1, &readfds, NULL, NULL, &tv);
 
         // select() 리턴 처리
         if (sel < 0) {
-            // select 호출 에러 (진단 차원으로 perror 찍고, 그냥 종료)
             perror("select");
             break;
         }
 
         if (sel == 0) {
-            // 타임아웃 발생: TIMEOUT 초 동안 아무 데이터도 안 들어옴 → 자동 pass 처리
+            // 타임아웃 발생
             cJSON *resp = cJSON_CreateObject();
             countPass++;
             cJSON_AddStringToObject(resp, "type", "pass");
-            // pass 이후에도 보드는 변하지 않으므로, 그대로 최종 보드 다시 전송
             cJSON_AddItemToObject(resp, "board", board_to_json(&game));
             // 다음 플레이어로 턴 변경
             cJSON_AddStringToObject(resp, "next_player", game.players[1 - turn].username);
@@ -244,22 +242,19 @@ static void game_loop(void) {
             cJSON_Delete(resp);
 
             if (countPass == 2) {
-                // 양쪽 다 pass → 게임 종료 조건
+                // 양쪽 다 pass → 게임 종료
                 break;
             }
             if (isGameOver(game.board)) {
                 break;
             }
-            // 턴 넘기기
             turn = 1 - turn;
-            // 루프 처음으로 돌아가서 다음 턴으로 진행
             continue;
         }
 
-        // sel > 0이면, 분명히 읽을 데이터가 들어와 있다는 의미 → recv_json 호출
+        // sel > 0이면 읽을 데이터가 들어옴 → recv_json 호출
         cJSON *req = recv_json(client_fd);
         if (!req) {
-            // 연결 끊김 또는 파싱 에러
             break;
         }
 
@@ -267,8 +262,7 @@ static void game_loop(void) {
         cJSON *resp = cJSON_CreateObject();
 
         if (jtype && strcmp(jtype->valuestring, "move") == 0) {
-            // 정상적인 move 요청
-            countPass = 0;  // 패스 카운트 초기화
+            countPass = 0;  
             int r1 = cJSON_GetObjectItem(req, "sx")->valueint - 1;
             int c1 = cJSON_GetObjectItem(req, "sy")->valueint - 1;
             int r2 = cJSON_GetObjectItem(req, "tx")->valueint - 1;
@@ -276,12 +270,11 @@ static void game_loop(void) {
 
             // 만약 (0,0,0,0)이 넘어오면 “진짜 pass”가 아닌, “move 좌표가 유효하지 않을 때”로 간주
             if (r1 == -1 && c1 == -1 && r2 == -1 && c2 == -1) {
-                // 클라이언트가 좌표를 모두 0으로 보냈다는 것은 “move 못 해서 pass”  
-                // 하지만 이 때, 실제로 놓을 수 있는 move가 존재하면 invalid_move
+                // 클라이언트가 좌표를 모두 0으로 보내 pass 하지만 이 때, 실제로 놓을 수 있는 move가 존재하면 invalid_move
                 if (hasValidMove(game.board, game.players[turn].color)) {
                     cJSON_AddStringToObject(resp, "type", "invalid_move");
                 } else {
-                    // 정말 패스가 가능한 상황
+                    // 패스가 가능한 상황
                     countPass++;
                     cJSON_AddStringToObject(resp, "type", "pass");
                     cJSON_AddItemToObject(resp, "board", board_to_json(&game));
@@ -309,12 +302,12 @@ static void game_loop(void) {
                 cJSON_AddStringToObject(resp, "type", "move_ok");
                 turn = 1 - turn;
             } else {
-                // move 좌표가 올바르지 않다면 invalid_move
+                // 올바르지 않다면 invalid_move
                 cJSON_AddStringToObject(resp, "type", "invalid_move");
             }
         }
         else {
-            // type이 “move”가 아닌 경우(예: 잘못된 요청), 무시하고 다음 턴
+            // move가 아닌 경우 무시하고 다음 턴
             cJSON_Delete(resp);
             cJSON_Delete(req);
             continue;
@@ -328,7 +321,7 @@ static void game_loop(void) {
         cJSON_Delete(req);
     }
 
-    // Game over 처리 (이전 답변에서 보드와 점수 전송 예시처럼)
+    // Game over 처리 
     cJSON *over = cJSON_CreateObject();
     cJSON_AddStringToObject(over, "type", "game_over");
     cJSON *final_board = board_to_json(&game);
@@ -363,7 +356,7 @@ int server_run(const char *port) {
         }
     }
     close(listen_fd);
-    global_listen_fd = -1; // Mark server as stopped
+    global_listen_fd = -1; 
     printf("Server stopped.\n");
     return EXIT_SUCCESS;
 }
