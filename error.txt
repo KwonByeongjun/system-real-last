@@ -1,0 +1,4 @@
+kwon@raspberrypi:~/real_real/System-Programming-OctaFlip/hw3_202311160 $ g++ -Iinclude -Ilibs/rpi-rgb-led-matrix/include main.c src/server.c src/client.c src/json.c src/game.c src/board.c libs/cJSON.c -Llibs/rpi-rgb-led-matrix/lib -lrgbmatrix -lpthread -lrt -o hw3
+/usr/bin/ld: /tmp/ccPVXoxh.o: in function `client_run(char const*, char const*, char const*)':
+client.c:(.text+0x1b50): undefined reference to `generate_move(char (*) [8], char, int*, int*, int*, int*)'
+collect2: error: ld returned 1 exit status
