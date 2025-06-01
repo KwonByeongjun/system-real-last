@@ -13,12 +13,12 @@ typedef struct {
     int socket;
     char username[32];
     char color;
-    int registered; // 1 if registered, 0 otherwise
+    int registered; 
 } Player;
 
 typedef struct {
     Player players[MAX_CLIENTS];
-    int current_turn; // 0 = Red's turn, 1 = Blue's turn
+    int current_turn; 
     char board[BOARD_SIZE][BOARD_SIZE];
 } GameState;
 
