@@ -15,107 +15,106 @@
 #include <time.h>
 #include <math.h>
 
-#define SIMULATION_TIME 3.0
-#define SIZE            BOARD_SIZE   // 8
-#define INF             1000000000
+#define INF 1000000000
+#define MAX_DEPTH 6                  // 탐색 깊이 제한
+#define MOVE_ARRAY_SIZE 128          // Move 후보 개수 제한
+#define CANDIDATE_K 32               // Top-K 후보만 깊이 탐색
+static const double TIME_LIMIT = 2.6;  // 2.6초 시간 제한
 
+static struct timespec start_time;
 static char board_arr[BOARD_SIZE][BOARD_SIZE];
 
-
-/* =================================================================
- *                  시간 제한용 유틸리티
- * =================================================================*/
-static struct timespec start_time;
-static const double TIME_LIMIT = 2.9;  // 2.9초 후 탐색 중단
-
-static double elapsed_time() {
+// ========================
+// 시간 체크 유틸리티
+// ========================
+static double elapsed_time(void) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-    return (now.tv_sec - start_time.tv_sec)
+    return (now.tv_sec  - start_time.tv_sec)
          + (now.tv_nsec - start_time.tv_nsec) * 1e-9;
 }
 
-static int time_exceeded() {
+static inline int time_exceeded(void) {
     return elapsed_time() >= TIME_LIMIT;
 }
 
-/* =================================================================
- *                        AI  (Iterative Deepening + α-β 가지치기)
- * =================================================================*/
-
-// 8방향 증분 배열 (상, 상좌, 상우, 좌, 우, 하좌, 하, 하우)
-static const int DR[8] = { -1, -1, -1,  0,  0,  1,  1,  1 };
-static const int DC[8] = { -1,  0,  1, -1,  1, -1,  0,  1 };
-
-/* 보드 복사 */
-static inline void copy_board(char dst[SIZE][SIZE], char src[SIZE][SIZE]) {
-    memcpy(dst, src, SIZE * SIZE);
+// ========================
+// 보드 복사, 수 적용, 평가 함수
+// ========================
+static inline void copy_board(char dst[BOARD_SIZE][BOARD_SIZE],
+                              const char src[BOARD_SIZE][BOARD_SIZE]) {
+    memcpy(dst, src, BOARD_SIZE * BOARD_SIZE);
 }
 
-/* 주어진 이동을 보드에 적용 (점프인지 아닌지 구분) */
-static void apply_move_sim(char bd[SIZE][SIZE],
-                           int r1, int c1, int r2, int c2,
-                           char me, int is_jump) {
+static inline void apply_move_sim(char bd[BOARD_SIZE][BOARD_SIZE],
+                                  int r1, int c1, int r2, int c2,
+                                  char me, int is_jump)
+{
     if (is_jump) bd[r1][c1] = '.';
-    bd[r2][c2] = me;
-    char opp = (me == 'R') ? 'B' : 'R';
+    bd[r2][c2]  = me;
+    char opp = (me == 'R' ? 'B' : 'R');
     for (int d = 0; d < 8; ++d) {
-        int nr = r2 + DR[d], nc = c2 + DC[d];
-        if (0 <= nr && nr < SIZE && 0 <= nc && nc < SIZE && bd[nr][nc] == opp) {
+        int nr = r2 + directions[d][0];
+        int nc = c2 + directions[d][1];
+        if (nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE
+            && bd[nr][nc] == opp) {
             bd[nr][nc] = me;
         }
     }
 }
 
-/* 모빌리티 계산: 특정 색의 돌이 둘 수 있는 빈 칸 개수 세기 */
-static int mobility(char bd[SIZE][SIZE], char me) {
+static int mobility(const char bd[BOARD_SIZE][BOARD_SIZE], char me) {
     int cnt = 0;
-    for (int r = 0; r < SIZE; ++r) {
-        for (int c = 0; c < SIZE; ++c) {
-            if (bd[r][c] != me) continue;
-            for (int d = 0; d < 8; ++d) {
-                int nr = r + DR[d], nc = c + DC[d];
-                for (int step = 1; step <= 2; ++step, nr += DR[d], nc += DC[d]) {
-                    if (nr < 0 || nr >= SIZE || nc < 0 || nc >= SIZE) break;
-                    if (bd[nr][nc] == '.') {
-                        ++cnt;
-                        goto NEXT_CELL;
+    for (int r = 0; r < BOARD_SIZE; ++r) {
+        for (int c = 0; c < BOARD_SIZE; ++c) {
+            if (bd[r][c] == me) {
+                for (int d = 0; d < 8; ++d) {
+                    int nr = r + directions[d][0], nc = c + directions[d][1];
+                    for (int step = 1; step <= 2; ++step,
+                         nr += directions[d][0], nc += directions[d][1]) {
+                        if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE)
+                            break;
+                        if (bd[nr][nc] == '.') {
+                            ++cnt;
+                            goto NEXT_CELL;
+                        }
                     }
                 }
             }
-            NEXT_CELL: ;
+        NEXT_CELL: ;
         }
     }
     return cnt;
 }
 
-/* 보드 평가 함수: 말 개수 차이 *100 + 모빌리티 차이 *10 */
-static int evaluate_board(char bd[SIZE][SIZE], char me) {
-    char opp = (me == 'R') ? 'B' : 'R';
+static int evaluate_board(const char bd[BOARD_SIZE][BOARD_SIZE], char me) {
+    char opp = (me == 'R' ? 'B' : 'R');
     int my_cnt = 0, opp_cnt = 0;
-    for (int i = 0; i < SIZE; ++i) {
-        for (int j = 0; j < SIZE; ++j) {
-            if      (bd[i][j] == me)  ++my_cnt;
-            else if (bd[i][j] == opp) ++opp_cnt;
+    for (int r = 0; r < BOARD_SIZE; ++r) {
+        for (int c = 0; c < BOARD_SIZE; ++c) {
+            if      (bd[r][c] == me)  ++my_cnt;
+            else if (bd[r][c] == opp) ++opp_cnt;
         }
     }
     int piece_diff = my_cnt - opp_cnt;
-    int my_mob  = mobility(bd, me);
+    int my_mob = mobility(bd, me);
     int opp_mob = mobility(bd, opp);
     int mob_diff = my_mob - opp_mob;
     return piece_diff * 100 + mob_diff * 10;
 }
 
-/* 현재 플레이어가 둘 수 있는 수가 하나라도 있는지 검사 */
-static int has_moves(char bd[SIZE][SIZE], char player) {
-    for (int r = 0; r < SIZE; ++r) {
-        for (int c = 0; c < SIZE; ++c) {
-            if (bd[r][c] != player) continue;
-            for (int d = 0; d < 8; ++d) {
-                int nr = r + DR[d], nc = c + DC[d];
-                for (int step = 1; step <= 2; ++step, nr += DR[d], nc += DC[d]) {
-                    if (nr < 0 || nr >= SIZE || nc < 0 || nc >= SIZE) break;
-                    if (bd[nr][nc] == '.') return 1;
+static int has_moves(const char bd[BOARD_SIZE][BOARD_SIZE], char player) {
+    for (int r = 0; r < BOARD_SIZE; ++r) {
+        for (int c = 0; c < BOARD_SIZE; ++c) {
+            if (bd[r][c] == player) {
+                for (int d = 0; d < 8; ++d) {
+                    int nr = r + directions[d][0], nc = c + directions[d][1];
+                    for (int step = 1; step <= 2; ++step,
+                         nr += directions[d][0], nc += directions[d][1]) {
+                        if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE)
+                            break;
+                        if (bd[nr][nc] == '.') return 1;
+                    }
                 }
             }
         }
@@ -123,10 +122,13 @@ static int has_moves(char bd[SIZE][SIZE], char player) {
     return 0;
 }
 
-/* α-β 가지치기 탐색 (negamax 형태) */
-static int alpha_beta(char bd[SIZE][SIZE],
+// ========================
+// Alpha-Beta 탐색
+// ========================
+static int alpha_beta(char bd[BOARD_SIZE][BOARD_SIZE],
                       char me, char player,
-                      int depth, int alpha, int beta) {
+                      int depth, int alpha, int beta)
+{
     if (time_exceeded()) {
         return evaluate_board(bd, me);
     }
@@ -134,158 +136,135 @@ static int alpha_beta(char bd[SIZE][SIZE],
         return evaluate_board(bd, me);
     }
 
-    char opp = (player == 'R') ? 'B' : 'R';
+    char opp = (player == 'R' ? 'B' : 'R');
 
-    /* 현재 플레이어가 둘 수 없으면(턴 건너뛰기 검사) */
+    // 패스 처리
     if (!has_moves(bd, player)) {
         if (!has_moves(bd, opp)) {
-            /* 양쪽 모두 못 두면 게임 종료, 터미널 스코어 */
             int my_cnt = 0, opp_cnt = 0;
-            for (int i = 0; i < SIZE; ++i) {
-                for (int j = 0; j < SIZE; ++j) {
-                    if      (bd[i][j] == me)  ++my_cnt;
-                    else if (bd[i][j] == opp) ++opp_cnt;
+            for (int r = 0; r < BOARD_SIZE; ++r)
+                for (int c = 0; c < BOARD_SIZE; ++c) {
+                    if      (bd[r][c] == me)  ++my_cnt;
+                    else if (bd[r][c] == opp) ++opp_cnt;
                 }
-            }
             if      (my_cnt > opp_cnt) return  INF/2;
             else if (my_cnt < opp_cnt) return -INF/2;
-            else                        return  0;
+            else                       return 0;
         }
-        /* 상대만 수가 있으면, 내 차례 건너뛰기 */
-        int val = -alpha_beta(bd, me, opp, depth, -beta, -alpha);
-        return val;
+        return -alpha_beta(bd, me, opp, depth, -beta, -alpha);
     }
 
     int best_val = -INF;
-    typedef struct {
-        int r1, c1, r2, c2;
-        int static_score;
-    } Move;
-    Move all_moves[256];
-    int move_cnt = 0;
+    extern int g_move_cnt;
+    extern struct MoveCandidate g_move_list[MOVE_ARRAY_SIZE];
 
-    /* (1) 가능한 모든 수 생성 & 정적 평가값(static_score) 계산 */
-    for (int r = 0; r < SIZE; ++r) {
-        for (int c = 0; c < SIZE; ++c) {
-            if (bd[r][c] != player) continue;
-            for (int d = 0; d < 8; ++d) {
-                int nr = r + DR[d], nc = c + DC[d];
-                for (int step = 1; step <= 2; ++step, nr += DR[d], nc += DC[d]) {
-                    if (nr < 0 || nr >= SIZE || nc < 0 || nc >= SIZE) break;
-                    if (bd[nr][nc] != '.') continue;
-
-                    /* 임시 보드에 한 수 적용 */
-                    char sim[SIZE][SIZE];
-                    copy_board(sim, bd);
-                    apply_move_sim(sim, r, c, nr, nc, player, (step == 2));
-                    /* 정적 평가: evaluate_board(…, player) 사용 */
-                    int st_score = evaluate_board(sim, player);
-                    all_moves[move_cnt++] = (Move){r, c, nr, nc, st_score};
-                }
-            }
-        }
-    }
-
-    /* (2) 정적 평가(static_score) 내림차순으로 정렬(버블 정렬) */
-    for (int i = 0; i < move_cnt; ++i) {
-        for (int j = i + 1; j < move_cnt; ++j) {
-            if (all_moves[j].static_score > all_moves[i].static_score) {
-                Move tmp = all_moves[i];
-                all_moves[i] = all_moves[j];
-                all_moves[j] = tmp;
-            }
-        }
-    }
-
-    /* (3) α‐β 탐색: ordering된 순서대로 탐색 */
-    for (int i = 0; i < move_cnt; ++i) {
-        int r1 = all_moves[i].r1, c1 = all_moves[i].c1;
-        int r2 = all_moves[i].r2, c2 = all_moves[i].c2;
-        char sim[SIZE][SIZE];
+    int limit = g_move_cnt < CANDIDATE_K ? g_move_cnt : CANDIDATE_K;
+    for (int i = 0; i < limit; ++i) {
+        if (time_exceeded()) break;
+        int r1 = g_move_list[i].r1;
+        int c1 = g_move_list[i].c1;
+        int r2 = g_move_list[i].r2;
+        int c2 = g_move_list[i].c2;
+        char sim[BOARD_SIZE][BOARD_SIZE];
         copy_board(sim, bd);
         apply_move_sim(sim, r1, c1, r2, c2, player,
-                       (abs(r1 - r2) > 1 || abs(c1 - c2) > 1));
-
+            (abs(r1 - r2) > 1 || abs(c1 - c2) > 1));
         int val = -alpha_beta(sim, me, opp, depth - 1, -beta, -alpha);
         if (val > best_val) best_val = val;
         if (best_val > alpha) alpha = best_val;
         if (alpha >= beta) break;
-        if (time_exceeded()) break;
     }
-
     return best_val;
 }
 
-/* Iterative Deepening + α-β 가지치기를 이용한 generate_move */
-int generate_move(char board[BOARD_SIZE][BOARD_SIZE], char player_color,
-                  int *out_r1, int *out_c1,
-                  int *out_r2, int *out_c2) {
-    /* 탐색 시작 시각 기록 */
+// ========================
+// Move 후보를 한 번만 생성 + Top-K 정렬
+// ========================
+struct MoveCandidate {
+    int r1, c1, r2, c2;
+    int static_score;
+};
+static struct MoveCandidate g_move_list[MOVE_ARRAY_SIZE];
+static int g_move_cnt = 0;
+
+static void generate_all_moves(const char bd[BOARD_SIZE][BOARD_SIZE], char player) {
+    g_move_cnt = 0;
+    for (int r = 0; r < BOARD_SIZE; ++r) {
+        for (int c = 0; c < BOARD_SIZE; ++c) {
+            if (bd[r][c] != player) continue;
+            for (int d = 0; d < 8; ++d) {
+                int nr = r + directions[d][0], nc = c + directions[d][1];
+                for (int step = 1; step <= 2; ++step,
+                     nr += directions[d][0], nc += directions[d][1]) {
+                    if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) break;
+                    if (bd[nr][nc] != '.') continue;
+                    if (g_move_cnt >= MOVE_ARRAY_SIZE) break;
+                    char sim[BOARD_SIZE][BOARD_SIZE];
+                    copy_board(sim, bd);
+                    apply_move_sim(sim, r, c, nr, nc, player,
+                        (abs(r - nr) > 1 || abs(c - nc) > 1));
+                    int st_score = evaluate_board(sim, player);
+                    g_move_list[g_move_cnt++] = (struct MoveCandidate){
+                        r, c, nr, nc, st_score
+                    };
+                }
+            }
+        }
+    }
+    // Top-K 후보만 앞쪽에 오도록 partial selection
+    int limit = g_move_cnt < CANDIDATE_K ? g_move_cnt : CANDIDATE_K;
+    for (int i = 0; i < limit; ++i) {
+        int maxj = i;
+        for (int j = i + 1; j < g_move_cnt; ++j) {
+            if (g_move_list[j].static_score > g_move_list[maxj].static_score) {
+                maxj = j;
+            }
+        }
+        if (maxj != i) {
+            struct MoveCandidate tmp = g_move_list[i];
+            g_move_list[i] = g_move_list[maxj];
+            g_move_list[maxj] = tmp;
+        }
+    }
+    // g_move_cnt 그대로 두면, 검색 시 CANDIDATE_K 까지만 사용됨
+}
+
+// ========================
+// 개선된 generate_move()
+// ========================
+int generate_move(char board[BOARD_SIZE][BOARD_SIZE],
+                  char player_color,
+                  int *out_r1, int *out_c1, int *out_r2, int *out_c2)
+{
     clock_gettime(CLOCK_MONOTONIC, &start_time);
 
-    char me = player_color;
-    char opp = (me == 'R') ? 'B' : 'R';
+    char me  = player_color;
+    char opp = (me == 'R' ? 'B' : 'R');
+
+    // 1) 후보 이동을 한 번만 생성
+    generate_all_moves(board, me);
 
     int best_score_overall = -INF;
     int best_r1 = -1, best_c1 = -1, best_r2 = -1, best_c2 = -1;
 
-    /* 시간 내에 가능한 만큼 깊이(depth)를 1씩 늘리며 탐색 */
-    for (int depth = 1; depth <= 8; ++depth) {
+    // 2) Iterative Deepening
+    for (int depth = 1; depth <= MAX_DEPTH; ++depth) {
         if (time_exceeded()) break;
 
         int local_best_score = -INF;
         int local_r1 = -1, local_c1 = -1, local_r2 = -1, local_c2 = -1;
 
-        typedef struct {
-            int r1, c1, r2, c2;
-            int static_score;
-        } Move;
-        Move all_moves[256];
-        int move_cnt = 0;
-
-        /* (1) 후보 생성 & 정적 평가 */
-        for (int r = 0; r < SIZE; ++r) {
-            for (int c = 0; c < SIZE; ++c) {
-                if (board[r][c] != me) continue;
-                for (int d = 0; d < 8; ++d) {
-                    int nr = r + DR[d], nc = c + DC[d];
-                    for (int step = 1; step <= 2; ++step, nr += DR[d], nc += DC[d]) {
-                        if (nr < 0 || nr >= SIZE || nc < 0 || nc >= SIZE) break;
-                        if (board[nr][nc] != '.') continue;
-
-                        char sim[SIZE][SIZE];
-                        copy_board(sim, board);
-                        apply_move_sim(sim, r, c, nr, nc, me,
-                                       (abs(r - nr) > 1 || abs(c - nc) > 1));
-                        int st_score = evaluate_board(sim, me);
-                        all_moves[move_cnt++] = (Move){r, c, nr, nc, st_score};
-                    }
-                }
-            }
-        }
-
-        /* (2) 정렬: 정적 점수 내림차순 */
-        for (int i = 0; i < move_cnt; ++i) {
-            for (int j = i + 1; j < move_cnt; ++j) {
-                if (all_moves[j].static_score > all_moves[i].static_score) {
-                    Move tmp = all_moves[i];
-                    all_moves[i] = all_moves[j];
-                    all_moves[j] = tmp;
-                }
-            }
-        }
-
-        /* (3) α‐β 탐색 (한 번에 하나씩 살펴보며 값 계산) */
-        for (int i = 0; i < move_cnt; ++i) {
+        int limit = g_move_cnt < CANDIDATE_K ? g_move_cnt : CANDIDATE_K;
+        for (int i = 0; i < limit; ++i) {
             if (time_exceeded()) break;
-
-            int r1 = all_moves[i].r1, c1 = all_moves[i].c1;
-            int r2 = all_moves[i].r2, c2 = all_moves[i].c2;
-            char sim[SIZE][SIZE];
+            int r1 = g_move_list[i].r1;
+            int c1 = g_move_list[i].c1;
+            int r2 = g_move_list[i].r2;
+            int c2 = g_move_list[i].c2;
+            char sim[BOARD_SIZE][BOARD_SIZE];
             copy_board(sim, board);
             apply_move_sim(sim, r1, c1, r2, c2, me,
-                           (abs(r1 - r2) > 1 || abs(c1 - c2) > 1));
-
+                (abs(r1 - r2) > 1 || abs(c1 - c2) > 1));
             int score = -alpha_beta(sim, me, opp, depth - 1, -INF, +INF);
             if (score > local_best_score) {
                 local_best_score = score;
@@ -294,33 +273,28 @@ int generate_move(char board[BOARD_SIZE][BOARD_SIZE], char player_color,
             }
         }
 
-        /* (4) 이 깊이 탐색을 완료했다면, 최고 결과를 “전체 최적”으로 갱신 */
         if (!time_exceeded() && local_r1 >= 0) {
             best_score_overall = local_best_score;
             best_r1 = local_r1; best_c1 = local_c1;
             best_r2 = local_r2; best_c2 = local_c2;
         } else {
-            /* 시간이 다 되었거나 후보가 없으면 종료 */
             break;
         }
     }
 
-    /* 둘 수 없으면 패스 신호 (0 반환) */
     if (best_r1 < 0) {
         *out_r1 = *out_c1 = *out_r2 = *out_c2 = 0;
-        return 0;
+        return 0; // 패스
+    } else {
+        *out_r1 = best_r1; *out_c1 = best_c1;
+        *out_r2 = best_r2; *out_c2 = best_c2;
+        return 1; // 유효한 수
     }
-
-    *out_r1 = best_r1;
-    *out_c1 = best_c1;
-    *out_r2 = best_r2;
-    *out_c2 = best_c2;
-    return 1;
 }
 
-/* =================================================================
- *              이하 connect_to_server(), client_run()는 수정 금지
- * =================================================================*/
+// ========================
+// 서버 연결 유틸
+// ========================
 static int connect_to_server(const char *ip, const char *port) {
     struct addrinfo hints, *res, *p;
     int sockfd;
@@ -345,6 +319,9 @@ static int connect_to_server(const char *ip, const char *port) {
     return sockfd;
 }
 
+// ========================
+// 클라이언트 메인 루프
+// ========================
 int client_run(const char *ip, const char *port, const char *username) {
     int sockfd = connect_to_server(ip, port);
     if (sockfd < 0) {
@@ -372,7 +349,6 @@ int client_run(const char *ip, const char *port, const char *username) {
     while (1) {
         cJSON *msg = recv_json(sockfd);
         if (!msg) {
-            // 서버 연결이 끊기거나 오류 발생
             break;
         }
         cJSON *jtype = cJSON_GetObjectItem(msg, "type");
@@ -382,13 +358,13 @@ int client_run(const char *ip, const char *port, const char *username) {
         }
         const char *type = jtype->valuestring;
 
-        // 2-1) register_ack
+        // register_ack
         if (strcmp(type, "register_ack") == 0) {
             printf("Registered as %s\n", username);
             cJSON_Delete(msg);
             continue;
         }
-        // 2-2) register_nack
+        // register_nack
         else if (strcmp(type, "register_nack") == 0) {
             cJSON *jreason = cJSON_GetObjectItem(msg, "reason");
             if (jreason && jreason->valuestring)
@@ -398,23 +374,21 @@ int client_run(const char *ip, const char *port, const char *username) {
             cJSON_Delete(msg);
             break;
         }
-        // 2-3) game_start 
+        // game_start
         else if (strcmp(type, "game_start") == 0) {
             printf("Game started\n");
             cJSON *jplayers = cJSON_GetObjectItem(msg, "players");
             if (jplayers && cJSON_IsArray(jplayers)) {
                 const cJSON *p0 = cJSON_GetArrayItem(jplayers, 0);
-                // 첫 번째 R, 아니면 B
                 if (p0 && p0->valuestring && strcmp(username, p0->valuestring) == 0)
                     my_color = 'R';
                 else
                     my_color = 'B';
             }
-
             cJSON_Delete(msg);
             continue;
         }
-        // 2-4) your_turn (board + timeout 전달)
+        // your_turn
         else if (strcmp(type, "your_turn") == 0) {
             cJSON *jbarr = cJSON_GetObjectItem(msg, "board");
             if (jbarr && cJSON_IsArray(jbarr)) {
@@ -432,7 +406,6 @@ int client_run(const char *ip, const char *port, const char *username) {
                     }
                 }
             }
-            // timeout
             cJSON *jtimeout = cJSON_GetObjectItem(msg, "timeout");
             if (jtimeout)
                 printf("Timeout: %.1f s\n", jtimeout->valuedouble);
@@ -441,7 +414,6 @@ int client_run(const char *ip, const char *port, const char *username) {
             int r1, c1, r2, c2;
             int has_move = generate_move(board_arr, my_color, &r1, &c1, &r2, &c2);
 
-            // move, pass
             cJSON *mv = cJSON_CreateObject();
             cJSON_AddStringToObject(mv, "type", "move");
             cJSON_AddStringToObject(mv, "username", username);
@@ -451,7 +423,6 @@ int client_run(const char *ip, const char *port, const char *username) {
                 cJSON_AddNumberToObject(mv, "tx", r2 + 1);
                 cJSON_AddNumberToObject(mv, "ty", c2 + 1);
             } else {
-                // no valid move -> pass
                 cJSON_AddNumberToObject(mv, "sx", 0);
                 cJSON_AddNumberToObject(mv, "sy", 0);
                 cJSON_AddNumberToObject(mv, "tx", 0);
@@ -511,7 +482,6 @@ int client_run(const char *ip, const char *port, const char *username) {
                 }
                 update_led_matrix(board_arr);
             }
-            // score
             cJSON *jscores = cJSON_GetObjectItem(msg, "scores");
             if (jscores && cJSON_IsObject(jscores)) {
                 printf("Final scores:\n");
@@ -532,4 +502,3 @@ int client_run(const char *ip, const char *port, const char *username) {
     close(sockfd);
     return EXIT_SUCCESS;
 }
-
