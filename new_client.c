@@ -450,3 +450,69 @@ int client_run(const char *ip, const char *port, const char *username) {
     close(sockfd);
     return EXIT_SUCCESS;
 }
+
+
+
+
+
+kwon@raspberrypi:~/real_real/System-Programming-OctaFlip/hw3_202311160 $ g++ -Iinclude -Ilibs/rpi-rgb-led-matrix/include main.c src/server.c src/client.c src/json.c src/game.c src/board.c libs/cJSON.c -Llibs/rpi-rgb-led-matrix/lib -lrgbmatrix -lpthread -lrt -o hw3 
+src/client.c: In function ‘int alpha_beta(char (*)[8], char, char, int, int, int)’:
+src/client.c:164:31: error: invalid use of incomplete type ‘struct alpha_beta(char (*)[8], char, char, int, int, int)::MoveCandidate’
+  164 |         int r1 = g_move_list[i].r1;
+      |                               ^
+src/client.c:159:19: note: forward declaration of ‘struct alpha_beta(char (*)[8], char, char, int, int, int)::MoveCandidate’
+  159 |     extern struct MoveCandidate g_move_list[MOVE_ARRAY_SIZE];
+      |                   ^~~~~~~~~~~~~
+src/client.c:165:31: error: invalid use of incomplete type ‘struct alpha_beta(char (*)[8], char, char, int, int, int)::MoveCandidate’
+  165 |         int c1 = g_move_list[i].c1;
+      |                               ^
+src/client.c:159:19: note: forward declaration of ‘struct alpha_beta(char (*)[8], char, char, int, int, int)::MoveCandidate’
+  159 |     extern struct MoveCandidate g_move_list[MOVE_ARRAY_SIZE];
+      |                   ^~~~~~~~~~~~~
+src/client.c:166:31: error: invalid use of incomplete type ‘struct alpha_beta(char (*)[8], char, char, int, int, int)::MoveCandidate’
+  166 |         int r2 = g_move_list[i].r2;
+      |                               ^
+src/client.c:159:19: note: forward declaration of ‘struct alpha_beta(char (*)[8], char, char, int, int, int)::MoveCandidate’
+  159 |     extern struct MoveCandidate g_move_list[MOVE_ARRAY_SIZE];
+      |                   ^~~~~~~~~~~~~
+src/client.c:167:31: error: invalid use of incomplete type ‘struct alpha_beta(char (*)[8], char, char, int, int, int)::MoveCandidate’
+  167 |         int c2 = g_move_list[i].c2;
+      |                               ^
+src/client.c:159:19: note: forward declaration of ‘struct alpha_beta(char (*)[8], char, char, int, int, int)::MoveCandidate’
+  159 |     extern struct MoveCandidate g_move_list[MOVE_ARRAY_SIZE];
+      |                   ^~~~~~~~~~~~~
+src/client.c: At global scope:
+src/client.c:187:29: error: conflicting declaration ‘MoveCandidate g_move_list [128]’
+  187 | static struct MoveCandidate g_move_list[MOVE_ARRAY_SIZE];
+      |                             ^~~~~~~~~~~
+src/client.c:159:33: note: previous declaration as ‘alpha_beta(char (*)[8], char, char, int, int, int)::MoveCandidate g_move_list [128]’
+  159 |     extern struct MoveCandidate g_move_list[MOVE_ARRAY_SIZE];
+      |                                 ^~~~~~~~~~~
+src/client.c:188:12: error: ‘g_move_cnt’ was declared ‘extern’ and later ‘static’ [-fpermissive]
+  188 | static int g_move_cnt = 0;
+      |            ^~~~~~~~~~
+src/client.c:158:16: note: previous declaration of ‘g_move_cnt’
+  158 |     extern int g_move_cnt;
+      |                ^~~~~~~~~~
+src/client.c: In function ‘void generate_all_moves(const char (*)[8], char)’:
+src/client.c:207:21: error: ‘g_move_list’ was not declared in this scope; did you mean ‘g_move_cnt’?
+  207 |                     g_move_list[g_move_cnt++] = (struct MoveCandidate){
+      |                     ^~~~~~~~~~~
+      |                     g_move_cnt
+src/client.c:219:17: error: ‘g_move_list’ was not declared in this scope; did you mean ‘g_move_cnt’?
+  219 |             if (g_move_list[j].static_score > g_move_list[maxj].static_score) {
+      |                 ^~~~~~~~~~~
+      |                 g_move_cnt
+src/client.c:224:40: error: ‘g_move_list’ was not declared in this scope; did you mean ‘g_move_cnt’?
+  224 |             struct MoveCandidate tmp = g_move_list[i];
+      |                                        ^~~~~~~~~~~
+      |                                        g_move_cnt
+src/client.c: In function ‘int generate_move(char (*)[8], char, int*, int*, int*, int*)’:
+src/client.c:260:22: error: ‘g_move_list’ was not declared in this scope; did you mean ‘g_move_cnt’?
+  260 |             int r1 = g_move_list[i].r1;
+      |                      ^~~~~~~~~~~
+      |                      g_move_cnt
+src/client.c: At global scope:
+src/client.c:159:33: error: ‘alpha_beta(char (*)[8], char, char, int, int, int)::MoveCandidate g_move_list [128]’, declared using local type ‘alpha_beta(char (*)[8], char, char, int, int, int)::MoveCandidate’, is used but never defined [-fpermissive]
+  159 |     extern struct MoveCandidate g_move_list[MOVE_ARRAY_SIZE];
+      |
