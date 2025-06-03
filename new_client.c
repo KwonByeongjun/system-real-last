@@ -1,5 +1,5 @@
 #include "../include/client.h"
-#include "../include/game.h"
+#include "../include/game.h"      // directions[8][2] 등 제공
 #include "../include/json.h"
 #include "../include/board.h"
 #include "../libs/cJSON.h"
@@ -15,281 +15,229 @@
 #include <time.h>
 #include <math.h>
 
-#define INF 1000000000
-#define MAX_DEPTH 6                  // 탐색 깊이 제한
-#define MOVE_ARRAY_SIZE 128          // Move 후보 개수 제한
-#define CANDIDATE_K 32               // Top-K 후보만 깊이 탐색
-static const double TIME_LIMIT = 2.6;  // 2.6초 시간 제한
+// -----------------------------------------------------------------------------
+//  Greedy‑specific 설정값 & 헬퍼
+// -----------------------------------------------------------------------------
+#define INF             1000000000
+#define BOARD_N         BOARD_SIZE   // 8
+#define MAX_MOVES_EST   256          // 안전 여유치
+#define FEATURE_CNT     8
 
-static struct timespec start_time;
-static char board_arr[BOARD_SIZE][BOARD_SIZE];
+// 단계별(초반/중반/종반) 가중치 테이블
+static const int W[3][FEATURE_CNT] = {
+    /* 0:Opening */ { +100, +60, +800, +40, -30, -20, +10,   0 },
+    /* 1:Mid     */ { +100, +80, +400, +60, -30, -10,   0,   0 },
+    /* 2:End     */ {  +30, +40, +100,   0,   0,  -5,   0, +50 }
+};
 
-// ========================
-// 시간 체크 유틸리티
-// ========================
-static double elapsed_time(void) {
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    return (now.tv_sec  - start_time.tv_sec)
-         + (now.tv_nsec - start_time.tv_nsec) * 1e-9;
+static inline int phase_index(int empty_cnt) {
+    if (empty_cnt > 32) return 0;     // opening
+    if (empty_cnt > 12) return 1;     // mid‑game
+    return 2;                         // end‑game
 }
 
-static inline int time_exceeded(void) {
-    return elapsed_time() >= TIME_LIMIT;
+static inline int in_board(int r, int c) {
+    return (unsigned)r < BOARD_N && (unsigned)c < BOARD_N;
 }
 
-// ========================
-// 보드 복사, 수 적용, 평가 함수
-// ========================
-static inline void copy_board(char dst[BOARD_SIZE][BOARD_SIZE],
-                              const char src[BOARD_SIZE][BOARD_SIZE]) {
-    memcpy(dst, src, BOARD_SIZE * BOARD_SIZE);
+// Manhattan 거리  → 중앙화 보너스 (‑distance)
+static inline int central_bonus(int r, int c) {
+    static const int table[BOARD_N][BOARD_N] = {
+        { 7,6,5,4,4,5,6,7 },
+        { 6,5,4,3,3,4,5,6 },
+        { 5,4,3,2,2,3,4,5 },
+        { 4,3,2,1,1,2,3,4 },
+        { 4,3,2,1,1,2,3,4 },
+        { 5,4,3,2,2,3,4,5 },
+        { 6,5,4,3,3,4,5,6 },
+        { 7,6,5,4,4,5,6,7 }
+    };
+    return -table[r][c];
 }
 
-static inline void apply_move_sim(char bd[BOARD_SIZE][BOARD_SIZE],
-                                  int r1, int c1, int r2, int c2,
-                                  char me, int is_jump)
-{
-    if (is_jump) bd[r1][c1] = '.';
-    bd[r2][c2]  = me;
-    char opp = (me == 'R' ? 'B' : 'R');
-    for (int d = 0; d < 8; ++d) {
-        int nr = r2 + directions[d][0];
-        int nc = c2 + directions[d][1];
-        if (nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE
-            && bd[nr][nc] == opp) {
-            bd[nr][nc] = me;
-        }
+// -----------------------------------------------------------------------------
+//  빠른 mobility / frontier 계산용 LUT  (8‑bit neighborhood mask → frontier?
+// -----------------------------------------------------------------------------
+static unsigned char FRONTIER_LUT[256];
+static void init_frontier_lut(void) {
+    for (int m = 0; m < 256; ++m) {
+        int is_frontier = 0;
+        for (int bit = 0; bit < 8; ++bit) if (!(m & (1 << bit))) { is_frontier = 1; break; }
+        FRONTIER_LUT[m] = (unsigned char)is_frontier;
     }
 }
 
-static int mobility(const char bd[BOARD_SIZE][BOARD_SIZE], char me) {
-    int cnt = 0;
-    for (int r = 0; r < BOARD_SIZE; ++r) {
-        for (int c = 0; c < BOARD_SIZE; ++c) {
-            if (bd[r][c] == me) {
-                for (int d = 0; d < 8; ++d) {
-                    int nr = r + directions[d][0], nc = c + directions[d][1];
-                    for (int step = 1; step <= 2; ++step,
-                         nr += directions[d][0], nc += directions[d][1]) {
-                        if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE)
-                            break;
-                        if (bd[nr][nc] == '.') {
-                            ++cnt;
-                            goto NEXT_CELL;
-                        }
-                    }
+// -----------------------------------------------------------------------------
+//  시뮬레이션 적용 (clone / jump) + 특징 추출
+// -----------------------------------------------------------------------------
+static int evaluate_move(char bd[BOARD_N][BOARD_N], int r1, int c1, int r2, int c2,
+                         char me, char opp, int empty_cnt_before)
+{
+    int feat[FEATURE_CNT] = {0};
+    int is_jump = (abs(r1 - r2) > 1 || abs(c1 - c2) > 1);
+
+    // ---- immediate gain & flips ----
+    int flip_cnt = 0;
+    if (is_jump) bd[r1][c1] = '.';
+    bd[r2][c2] = me;
+
+    for (int d = 0; d < 8; ++d) {
+        int nr = r2 + directions[d][0];
+        int nc = c2 + directions[d][1];
+        if (in_board(nr, nc) && bd[nr][nc] == opp) {
+            bd[nr][nc] = me;
+            ++flip_cnt;
+        }
+    }
+    feat[0] = flip_cnt;                         // Immediate gain
+
+    // ---- mobility difference after move ----
+    int my_mob = 0, opp_mob = 0;
+    for (int r = 0; r < BOARD_N; ++r) {
+        for (int c = 0; c < BOARD_N; ++c) {
+            if (bd[r][c] == '.') continue;
+            char who = bd[r][c];
+            for (int d = 0; d < 8; ++d) {
+                int nr = r + directions[d][0];
+                int nc = c + directions[d][1];
+                for (int step = 1; step <= 2; ++step, nr += directions[d][0], nc += directions[d][1]) {
+                    if (!in_board(nr, nc)) break;
+                    if (bd[nr][nc] != '.') continue;
+                    if (who == me) ++my_mob; else ++opp_mob;
+                    goto NEXT_CELL;   // 한 칸이라도 비어있으면 mobility 확보
                 }
             }
         NEXT_CELL: ;
         }
     }
-    return cnt;
-}
+    feat[1] = my_mob - opp_mob;                 // Mobility Δ
 
-static int evaluate_board(const char bd[BOARD_SIZE][BOARD_SIZE], char me) {
-    char opp = (me == 'R' ? 'B' : 'R');
-    int my_cnt = 0, opp_cnt = 0;
-    for (int r = 0; r < BOARD_SIZE; ++r) {
-        for (int c = 0; c < BOARD_SIZE; ++c) {
-            if      (bd[r][c] == me)  ++my_cnt;
-            else if (bd[r][c] == opp) ++opp_cnt;
-        }
-    }
-    int piece_diff = my_cnt - opp_cnt;
-    int my_mob = mobility(bd, me);
-    int opp_mob = mobility(bd, opp);
-    int mob_diff = my_mob - opp_mob;
-    return piece_diff * 100 + mob_diff * 10;
-}
+    // ---- corner & edge ----
+    const int corner = ( (r2 == 0 && c2 == 0) || (r2 == 0 && c2 == 7)
+                      || (r2 == 7 && c2 == 0) || (r2 == 7 && c2 == 7) );
+    feat[2] = corner;                           // Corner capture
+    const int edge = (!corner) && (r2 == 0 || r2 == 7 || c2 == 0 || c2 == 7);
+    feat[3] = edge;                             // Edge stability
 
-static int has_moves(const char bd[BOARD_SIZE][BOARD_SIZE], char player) {
-    for (int r = 0; r < BOARD_SIZE; ++r) {
-        for (int c = 0; c < BOARD_SIZE; ++c) {
-            if (bd[r][c] == player) {
-                for (int d = 0; d < 8; ++d) {
-                    int nr = r + directions[d][0], nc = c + directions[d][1];
-                    for (int step = 1; step <= 2; ++step,
-                         nr += directions[d][0], nc += directions[d][1]) {
-                        if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE)
-                            break;
-                        if (bd[nr][nc] == '.') return 1;
-                    }
+    // ---- frontier penalty (after move) ----
+    int frontier_cnt = 0;
+    for (int r = 0; r < BOARD_N; ++r) {
+        for (int c = 0; c < BOARD_N; ++c) if (bd[r][c] == me) {
+            unsigned char mask = 0;
+            int bit = 0;
+            for (int dr = -1; dr <= 1; ++dr) {
+                for (int dc = -1; dc <= 1; ++dc) if (dr || dc) {
+                    int nr = r + dr, nc = c + dc;
+                    if (!in_board(nr, nc) || bd[nr][nc] != '.') mask |= (1 << bit);
+                    ++bit;
                 }
             }
+            frontier_cnt += FRONTIER_LUT[mask] ^ 1; // 1 if any neighbor empty
         }
     }
-    return 0;
+    feat[4] = frontier_cnt;
+
+    // ---- jump discount ----
+    feat[5] = is_jump;
+
+    // ---- central bonus ----
+    feat[6] = central_bonus(r2, c2);
+
+    // ---- parity (빈칸 짝/홀) ----
+    int empty_after = empty_cnt_before - 1 - (is_jump ? 0 : 0); // 점프/클론 모두 ‑1
+    feat[7] = (empty_after & 1) ^ 1;  // 짝수면 1, 홀수면 0
+
+    // ---- 가중치 합산 ----
+    int idx = phase_index(empty_after);
+    int score = 0;
+    for (int i = 0; i < FEATURE_CNT; ++i) score += feat[i] * W[idx][i];
+
+    return score;
 }
 
-// ========================
-// Alpha-Beta 탐색
-// ========================
-static int alpha_beta(char bd[BOARD_SIZE][BOARD_SIZE],
-                      char me, char player,
-                      int depth, int alpha, int beta)
+// -----------------------------------------------------------------------------
+//  Greedy move generator (TOP‑16 beam)
+// -----------------------------------------------------------------------------
+int generate_move(char board[BOARD_N][BOARD_N], char my_color,
+                  int *sr, int *sc, int *dr, int *dc)
 {
-    if (time_exceeded()) {
-        return evaluate_board(bd, me);
-    }
-    if (depth == 0) {
-        return evaluate_board(bd, me);
-    }
+    static int lut_init = 0;
+    if (!lut_init) { init_frontier_lut(); lut_init = 1; }
 
-    char opp = (player == 'R' ? 'B' : 'R');
+    char opp = (my_color == 'R' ? 'B' : 'R');
 
-    // 패스 처리
-    if (!has_moves(bd, player)) {
-        if (!has_moves(bd, opp)) {
-            int my_cnt = 0, opp_cnt = 0;
-            for (int r = 0; r < BOARD_SIZE; ++r)
-                for (int c = 0; c < BOARD_SIZE; ++c) {
-                    if      (bd[r][c] == me)  ++my_cnt;
-                    else if (bd[r][c] == opp) ++opp_cnt;
-                }
-            if      (my_cnt > opp_cnt) return  INF/2;
-            else if (my_cnt < opp_cnt) return -INF/2;
-            else                       return 0;
-        }
-        return -alpha_beta(bd, me, opp, depth, -beta, -alpha);
-    }
+    int empty_cnt = 0;
+    for (int r = 0; r < BOARD_N; ++r)
+        for (int c = 0; c < BOARD_N; ++c)
+            if (board[r][c] == '.') ++empty_cnt;
 
-    int best_val = -INF;
-    extern int g_move_cnt;
-    extern struct MoveCandidate g_move_list[MOVE_ARRAY_SIZE];
-
-    int limit = g_move_cnt < CANDIDATE_K ? g_move_cnt : CANDIDATE_K;
-    for (int i = 0; i < limit; ++i) {
-        if (time_exceeded()) break;
-        int r1 = g_move_list[i].r1;
-        int c1 = g_move_list[i].c1;
-        int r2 = g_move_list[i].r2;
-        int c2 = g_move_list[i].c2;
-        char sim[BOARD_SIZE][BOARD_SIZE];
-        copy_board(sim, bd);
-        apply_move_sim(sim, r1, c1, r2, c2, player,
-            (abs(r1 - r2) > 1 || abs(c1 - c2) > 1));
-        int val = -alpha_beta(sim, me, opp, depth - 1, -beta, -alpha);
-        if (val > best_val) best_val = val;
-        if (best_val > alpha) alpha = best_val;
-        if (alpha >= beta) break;
-    }
-    return best_val;
-}
-
-// ========================
-// Move 후보를 한 번만 생성 + Top-K 정렬
-// ========================
-struct MoveCandidate {
-    int r1, c1, r2, c2;
-    int static_score;
-};
-static struct MoveCandidate g_move_list[MOVE_ARRAY_SIZE];
-static int g_move_cnt = 0;
-
-static void generate_all_moves(const char bd[BOARD_SIZE][BOARD_SIZE], char player) {
-    g_move_cnt = 0;
-    for (int r = 0; r < BOARD_SIZE; ++r) {
-        for (int c = 0; c < BOARD_SIZE; ++c) {
-            if (bd[r][c] != player) continue;
-            for (int d = 0; d < 8; ++d) {
-                int nr = r + directions[d][0], nc = c + directions[d][1];
-                for (int step = 1; step <= 2; ++step,
-                     nr += directions[d][0], nc += directions[d][1]) {
-                    if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) break;
-                    if (bd[nr][nc] != '.') continue;
-                    if (g_move_cnt >= MOVE_ARRAY_SIZE) break;
-                    char sim[BOARD_SIZE][BOARD_SIZE];
-                    copy_board(sim, bd);
-                    apply_move_sim(sim, r, c, nr, nc, player,
-                        (abs(r - nr) > 1 || abs(c - nc) > 1));
-                    int st_score = evaluate_board(sim, player);
-                    g_move_list[g_move_cnt++] = (struct MoveCandidate){
-                        r, c, nr, nc, st_score
-                    };
-                }
-            }
-        }
-    }
-    // Top-K 후보만 앞쪽에 오도록 partial selection
-    int limit = g_move_cnt < CANDIDATE_K ? g_move_cnt : CANDIDATE_K;
-    for (int i = 0; i < limit; ++i) {
-        int maxj = i;
-        for (int j = i + 1; j < g_move_cnt; ++j) {
-            if (g_move_list[j].static_score > g_move_list[maxj].static_score) {
-                maxj = j;
-            }
-        }
-        if (maxj != i) {
-            struct MoveCandidate tmp = g_move_list[i];
-            g_move_list[i] = g_move_list[maxj];
-            g_move_list[maxj] = tmp;
-        }
-    }
-    // g_move_cnt 그대로 두면, 검색 시 CANDIDATE_K 까지만 사용됨
-}
-
-// ========================
-// 개선된 generate_move()
-// ========================
-int generate_move(char board[BOARD_SIZE][BOARD_SIZE],
-                  char player_color,
-                  int *out_r1, int *out_c1, int *out_r2, int *out_c2)
-{
-    clock_gettime(CLOCK_MONOTONIC, &start_time);
-
-    char me  = player_color;
-    char opp = (me == 'R' ? 'B' : 'R');
-
-    // 1) 후보 이동을 한 번만 생성
-    generate_all_moves(board, me);
-
-    int best_score_overall = -INF;
+    int best_score = -INF;
     int best_r1 = -1, best_c1 = -1, best_r2 = -1, best_c2 = -1;
 
-    // 2) Iterative Deepening
-    for (int depth = 1; depth <= MAX_DEPTH; ++depth) {
-        if (time_exceeded()) break;
+    // 1) legal move enumeration + feature scoring
+    typedef struct { int r1,c1,r2,c2,score; } Move;
+    Move moves[MAX_MOVES_EST];
+    int mcnt = 0;
 
-        int local_best_score = -INF;
-        int local_r1 = -1, local_c1 = -1, local_r2 = -1, local_c2 = -1;
+    for (int r = 0; r < BOARD_N; ++r) {
+        for (int c = 0; c < BOARD_N; ++c) if (board[r][c] == my_color) {
+            for (int d = 0; d < 8; ++d) {
+                int nr = r + directions[d][0];
+                int nc = c + directions[d][1];
+                for (int step = 1; step <= 2; ++step, nr += directions[d][0], nc += directions[d][1]) {
+                    if (!in_board(nr, nc)) break;
+                    if (board[nr][nc] != '.') continue;
 
-        int limit = g_move_cnt < CANDIDATE_K ? g_move_cnt : CANDIDATE_K;
-        for (int i = 0; i < limit; ++i) {
-            if (time_exceeded()) break;
-            int r1 = g_move_list[i].r1;
-            int c1 = g_move_list[i].c1;
-            int r2 = g_move_list[i].r2;
-            int c2 = g_move_list[i].c2;
-            char sim[BOARD_SIZE][BOARD_SIZE];
-            copy_board(sim, board);
-            apply_move_sim(sim, r1, c1, r2, c2, me,
-                (abs(r1 - r2) > 1 || abs(c1 - c2) > 1));
-            int score = -alpha_beta(sim, me, opp, depth - 1, -INF, +INF);
-            if (score > local_best_score) {
-                local_best_score = score;
-                local_r1 = r1; local_c1 = c1;
-                local_r2 = r2; local_c2 = c2;
+                    char sim[BOARD_N][BOARD_N];
+                    memcpy(sim, board, sizeof(char)*BOARD_N*BOARD_N);
+                    int sc_score = evaluate_move(sim, r, c, nr, nc, my_color, opp, empty_cnt);
+
+                    moves[mcnt++] = (Move){r,c,nr,nc,sc_score};
+                }
             }
         }
+    }
+    if (mcnt == 0) return 0;   // 패스
 
-        if (!time_exceeded() && local_r1 >= 0) {
-            best_score_overall = local_best_score;
-            best_r1 = local_r1; best_c1 = local_c1;
-            best_r2 = local_r2; best_c2 = local_c2;
-        } else {
-            break;
-        }
+    // 2) partial sort – 상위 16 개만 선별 (O(N*16))
+    const int BEAM = 16;
+    int limit = mcnt < BEAM ? mcnt : BEAM;
+    for (int i = 0; i < limit; ++i) {
+        int bestj = i;
+        for (int j = i+1; j < mcnt; ++j)
+            if (moves[j].score > moves[bestj].score) bestj = j;
+        if (bestj != i) { Move tmp = moves[i]; moves[i] = moves[bestj]; moves[bestj] = tmp; }
     }
 
-    if (best_r1 < 0) {
-        *out_r1 = *out_c1 = *out_r2 = *out_c2 = 0;
-        return 0; // 패스
-    } else {
-        *out_r1 = best_r1; *out_c1 = best_c1;
-        *out_r2 = best_r2; *out_c2 = best_c2;
-        return 1; // 유효한 수
+    // 3) 자살 수(상대 mobility 급증+내 급감) 필터 & 최종 선택
+    int chosen = 0;
+    for (int i = 0; i < limit; ++i) {
+        int r1=moves[i].r1, c1=moves[i].c1, r2=moves[i].r2, c2=moves[i].c2;
+        char sim[BOARD_N][BOARD_N];
+        memcpy(sim, board, sizeof(char)*BOARD_N*BOARD_N);
+        int is_jump = (abs(r1-r2)>1 || abs(c1-c2)>1);
+        evaluate_move(sim, r1, c1, r2, c2, my_color, opp, empty_cnt); // sim 에 반영
+
+        // mobility 재계산
+        int my_m=0, op_m=0;
+        for (int r=0;r<BOARD_N;++r)for(int c=0;c<BOARD_N;++c){
+            if(sim[r][c]=='.')continue;char w=sim[r][c];
+            for(int d=0;d<8;++d){int nr=r+directions[d][0],nc=c+directions[d][1];
+                for(int s=1;s<=2;++s,nr+=directions[d][0],nc+=directions[d][1]){
+                    if(!in_board(nr,nc))break; if(sim[nr][nc]!='.')continue;
+                    if(w==my_color)++my_m; else ++op_m; goto L1;} } L1:; }
+        if(op_m-my_m>70 && my_m<5) continue; // 자살 수 컷
+
+        best_score = moves[i].score;
+        best_r1=r1;best_c1=c1;best_r2=r2;best_c2=c2;
+        chosen=1;
+        break;
     }
+
+    if(!chosen){ best_r1=moves[0].r1;best_c1=moves[0].c1;best_r2=moves[0].r2;best_c2=moves[0].c2; }
+
+    *sr=best_r1; *sc=best_c1; *dr=best_r2; *dc=best_c2;
+    return 1;
 }
 
 // ========================
